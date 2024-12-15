@@ -1,0 +1,949 @@
+---
+title: "Bulk-RNA-seq"
+format: html
+editor: visual
+---
+
+```{r}
+#| output:  false
+#| echo: false
+
+setwd('C:/Users/Simo/Desktop/UNIVERSITY/1° ANNO/2° SEMESTRE/Genomics and Trascriptomics/2023/PAVESI/GENOMIC_PROJECT_PAVESI')
+```
+
+kidney+liver+brain start from 98
+
+## Libraries
+
+```{r}
+#| output: false
+
+library(tidyverse)
+library(recount)
+library(recount3)
+library(edgeR)
+
+tricol <- alpha(c(rep('darkmagenta', 3), rep('darkgreen', 3), rep('brown', 3)), 0.4)
+
+```
+
+## Data loading
+
+```{r}
+rse_brain <- readRDS("Data/rse_brain.rds")
+rse_liver <- readRDS("Data/rse_liver.rds")
+rse_kidney <- readRDS("Data/rse_kidney.rds")
+
+# raw input data
+rse_brain
+rse_liver
+rse_kidney
+
+```
+
+```{r}
+
+assays(rse_brain)$raw_counts[1:20]
+```
+
+### Transform counts from coverage format to 0/1
+
+```{r}
+assays(rse_brain)$counts <- transform_counts(rse_brain)
+assays(rse_liver)$counts <- transform_counts(rse_liver)
+assays(rse_kidney)$counts <- transform_counts(rse_kidney)
+
+
+```
+
+### Counts in TPM
+
+```{r}
+assays(rse_brain)$TPM <- getTPM(rse_brain,length_var = 'bp_length')
+assays(rse_liver)$TPM <- getTPM(rse_liver,length_var = 'bp_length')
+assays(rse_kidney)$TPM <- getTPM(rse_kidney,length_var = 'bp_length')
+
+#assays(rse_kidney)
+
+
+```
+
+```{r}
+# dimensions before filtering 
+#dim_before_brain<- dim(assays(rse_brain)$counts)[1]
+#dim_before_liver<- dim(assays(rse_liver)$counts)[1]
+#dim_before_kidney<- dim(assays(rse_kidney)$counts)[1]
+
+```
+
+# *QUALITY CHECK- choose your columns*
+
+##### *For choosing the three replicates we have to work on, we have to check the RIN, % of rRNA and % of mapped reads*
+
+### RIN
+
+```{r}
+#| output: false
+
+colData(rse_brain)$gtex.smrin[c(98,99,100,101, 102)] # 7.8, 7.1, 6.9, 8.8, 6.2
+colData(rse_liver)$gtex.smrin[c(98,100,103,104, 105)] # 7.0, 6.4, 6.6, 7.3,8.0
+
+# kidney only has 98 columns 
+# since i should start from 98 i go on and start from 1
+colData(rse_kidney)$gtex.smrin[colData(rse_kidney)$gtex.smrin >6.5]
+which(colData(rse_kidney)$gtex.smrin >6.5)
+
+# choice
+cbind(colData(rse_kidney)$gtex.smrin[colData(rse_kidney)$gtex.smrin >6.5]
+,which(colData(rse_kidney)$gtex.smrin >6.5))
+
+```
+
+```{r}
+
+brainrin <-colData(rse_brain)$gtex.smrin[c(98,99,101)] # 7.8, 7.1, 8.8
+liverrin <- colData(rse_liver)$gtex.smrin[c(98,104,105)] # 7.0, 7.3, 8.0
+kidneyrin <- colData(rse_kidney)$gtex.smrin[c(1,4,8)] # 7.5, 7.3, 7.9
+
+rinmat <-matrix(c(brainrin, liverrin, kidneyrin), nrow = 3, ncol = 3, byrow = T)
+
+rownames(rinmat) <- c('Brain', 'Liver', 'Kidney')
+colnames(rinmat) <- c('col1', 'col2', 'col3')
+rinmat
+```
+
+### RNA %
+
+```{r}
+rnaperc <- matrix(c(colData(rse_brain)$gtex.smrrnart[c(98,99,101)]*100,
+         colData(rse_liver)$gtex.smrrnart[c(98,103,104)]*100,
+         colData(rse_kidney)$gtex.smrrnart[c(1,4,8)]*100),
+       nrow = 3,
+       byrow = T, 
+       dimnames = list(c('Brain', 'Liver', 'Kidney'), #rownames
+                       c('col1', 'col2', 'col3')) #colnames
+       )
+
+
+rnaperc
+# surprisingly all ok
+
+```
+
+mit mapped correlation
+
+```{r}
+#plot(colData(rse_brain)$gtex.smrrnart[c(98,99,101)], colData(rse_brain)$"recount_qc.aligned_reads%.chrm"[c(98,99,101)])
+
+```
+
+```{r}
+#plot(colData(rse_liver)$gtex.smrrnart[c(98,104,105)], colData(rse_liver)$"recount_qc.aligned_reads%.chrm"[c(98,104,105)])
+
+```
+
+```{r}
+#plot(colData(rse_kidney)$gtex.smrrnart[c(1,4,8)], colData(rse_kidney)$"recount_qc.aligned_reads%.chrm"[c(1,4,8)])
+
+```
+
+```{r}
+table(rowData(rse_brain)$gbkey) 
+```
+
+### % MAPPED READS
+
+```{r}
+par(mfrow = c(1,3))
+
+mapped_brain <- colData(rse_brain)$"recount_qc.star.uniquely_mapped_reads_%_both"[c(98,99,101)]
+
+barplot(mapped_brain, 
+        ylim = c(0,100),
+        xlab = 'replicates',
+        names = c(98,99,101),
+         #main = 'Brain',
+        col = alpha('darkmagenta', 0.3)
+        ) 
+title('Brain', line = -.5, adj = 0.1)
+#text()
+
+
+mapped_liver <- colData(rse_liver)$"recount_qc.star.uniquely_mapped_reads_%_both"[c(98,104,105)]
+barplot(mapped_liver,  
+        ylim = c(0,100),
+        xlab = 'replicates',
+        names = c(98,104,105),
+        #main = 'Liver',
+        col = alpha('darkgreen', 0.3),
+        ) 
+title('Liver', line = -0.5, adj = 0.1)
+
+
+
+mapped_kidney <- colData(rse_kidney)$"recount_qc.star.uniquely_mapped_reads_%_both"[c(1,4,8)]
+barplot(colData(rse_kidney)$"recount_qc.star.uniquely_mapped_reads_%_both"[c(1,4,8)],  
+        ylim = c(0,100), 
+        xlab = 'replicates',
+        names = c(1,4,8),
+        #main = 'Kidney',
+        col = alpha('brown', 0.3)
+        ) 
+title('Kidney', line = -0.5, adj = 0.1)
+
+
+
+title("% of Mapped Reads", line = -1, outer = TRUE)
+
+#par(mfrow = c(1,1))
+#barplot(c(mapped_brain, mapped_liver, mapped_kidney),
+ #       ylim = c(0,100),
+  #      col = tricol)
+
+
+```
+
+# Start building the table
+
+```{r}
+
+# selected cols
+selected_brain <-rse_brain[, c(98,99,101)]
+selected_liver <- rse_liver[, c(98,104,105)]
+selected_kidney <- rse_kidney[, c(1,4,8)]
+
+counts_brain <- assays(selected_brain)$counts
+counts_liver <- assays(selected_liver)$counts
+counts_kidney <- assays(selected_kidney)$counts
+
+# concatenate tables
+count_table <- cbind(counts_brain, counts_liver, counts_kidney)
+
+# rename column according to sample tissue
+colnames(count_table) <- c('Brain98', 'Brain99','Brain101',
+                       'Liver98','Liver104','Liver105',
+                       'Kidney1','Kidney4','Kidney8')
+
+
+# row rename according to official gene name
+rownames(count_table) <- rowData(selected_brain)$gene_name
+
+tricol <- alpha(c(rep('darkmagenta', 3), rep('darkgreen', 3), rep('brown', 3)), 0.3)
+
+
+# LIBRARY SIZE
+colSums(count_table)
+barplot(colSums(count_table), main = 'Library size', col = tricol) 
+
+
+#count_table
+# ACTUAL preprocessed TABLE
+y <- DGEList(counts=count_table)
+
+# group according to the sample (now they are all 1)
+groups <- as.factor(c('Brain','Brain','Brain',
+                      'Liver','Liver','Liver',
+                      'Kidney','Kidney','Kidney')
+                    )
+
+y$samples$group <- groups
+
+```
+
+### Add some layer of information
+
+```{r}
+
+y$samples$rin <- as.factor(c(colData(selected_brain)$gtex.smrin,
+                             colData(selected_liver)$gtex.smrin,
+                             colData(selected_kidney)$gtex.smrin)
+                           )
+ 
+y$samples$slice <- as.factor(c(colData(selected_brain)$gtex.smtsd,
+                               colData(selected_liver)$gtex.smtsd,
+                               colData(selected_kidney)$gtex.smtsd)
+                             )
+
+y$samples$sex <- as.factor(c(colData(selected_brain)$gtex.sex,
+                             colData(selected_liver)$gtex.sex,
+                             colData(selected_kidney)$gtex.sex)
+                           )
+
+
+y$samples$age <- as.factor(c(colData(selected_brain)$gtex.age,
+                             colData(selected_liver)$gtex.age,
+                             colData(selected_kidney)$gtex.age)
+                           )
+
+
+y$samples$rRNA <- as.factor(c(colData(selected_brain)$gtex.smrrnart,
+                              colData(selected_liver)$gtex.smrrnart,
+                              colData(selected_kidney)$gtex.smrrnart)
+                            )
+
+
+y$samples$mapped <- as.factor(c(colData(selected_brain)$"recount_qc.star.uniquely_mapped_reads_%_both", 
+                                colData(selected_liver)$"recount_qc.star.uniquely_mapped_reads_%_both",
+                                colData(selected_kidney)$"recount_qc.star.uniquely_mapped_reads_%_both")
+                              )
+
+
+y$samples$chrm <- as.factor(c(colData(selected_brain)$"recount_qc.aligned_reads%.chrm", 
+                              colData(selected_liver)$"recount_qc.aligned_reads%.chrm",
+                              colData(selected_kidney)$"recount_qc.aligned_reads%.chrm")
+                            )
+```
+
+```{r}
+# filtering genes with low or 0 counts (no or extra-low expression)
+# low = at least 20M
+table(rowSums(y$counts == 0)==9) # THIS COMMAND COUNTS IF A GENE HAS 0 COUNTS IN __ALL__ REPLICATES
+
+table(filterByExpr(y, group=groups)) # F: 30559,  T: 23483
+
+keep.exprs <- filterByExpr(y, group=groups)
+y <- y[keep.exprs,, keep.lib.sizes=FALSE]
+
+```
+
+```{r}
+dim(y)
+y
+```
+
+### LogCPM and TMM Normalization
+
+```{r}
+#| layout-ncol: 2
+#| fig-width: 7
+# counts in CPM format
+
+logcpm_before <- cpm(y, log=TRUE) #log before norm
+logmed_b <- apply(logcpm_before,2, FUN = median)
+
+y <- calcNormFactors(y, method = "TMM") # Normalization
+
+
+logcpm_after <- cpm(y, log=TRUE) #  after norm
+logmed_a <- apply(logcpm_after,2, FUN = median)
+
+logmed_mat <- matrix(c(logmed_b, logmed_a), nrow = 2, byrow = T)
+colnames(logmed_mat) <- groups
+rownames(logmed_mat) <- c('Before', 'After')
+t(logmed_mat)
+
+
+```
+
+```{r}
+
+par(mfrow = c(1,2))
+boxplot(logcpm_before, ylab = 'log(CPM)', xlab = 'samples', col = tricol, main= 'Before')
+boxplot(logcpm_after, xlab = 'samples', col = tricol, main = 'After')
+title("TMM Normalization", line = -1, outer = TRUE)
+
+```
+
+```{r}
+
+cbind(c("Brain","Brain","Brain","Liver","Liver","Liver","Kidney","Kidney","Kidney"),
+y$samples$norm.factors)
+```
+
+# LINEAR MODEL
+
+```{r}
+# we don't need an intercept since 
+# samples are from different tissues 
+# -> no "common baseline"
+
+design <- model.matrix(~0+group, data=y$samples)
+colnames(design) <- levels(y$samples$group)
+design
+```
+
+# MDS plots
+
+### MDS = MultiDimensional Scaling is a non-linear dimensionality reduction
+
+#### *A means of visualizing the level of similarity of individual cases of a dataset*
+
+```{r}
+y
+```
+
+```{r}
+#par(mfrow = c(2,2))
+tricol <- alpha(c(rep('darkmagenta', 3), rep('darkgreen', 3), rep('brown', 3)), 0.8)
+
+
+plotMDS(logcpm_after, labels=groups, 
+        col = tricol,
+        cex = 1.5,
+        xlab = 'Dimension 1',
+        ylab = 'Dimension 2')
+
+plotMDS(logcpm_after, labels=y$samples$age, 
+        col = tricol,
+        cex = 1.5,
+        xlab = 'Dimension 1',
+        ylab = 'Dimension 2')
+
+plotMDS(logcpm_after, labels=y$samples$sex, 
+        col = tricol,
+        cex = 1.5,
+        xlab = 'Dimension 1',
+        ylab = 'Dimension 2')
+```
+
+```{r}
+
+plotMDS(logcpm_after, labels=y$samples$slice, 
+        col = tricol,
+        cex = 1,
+        xlab = 'Dimension 1',
+        ylab = 'Dimension 2')
+```
+
+```{r}
+#| layout-ncol: 2
+#| fig-width: 7
+plotMDS(logcpm_after, labels=y$samples$rRNA, main = 'rRNA', col = tricol,
+        xlab = 'Dimension 1',
+        ylab = 'Dimension 2')
+plotMDS(logcpm_after, labels=y$samples$chrm, main = 'ChrM', col =  tricol,
+        xlab = 'Dimension 1',
+        ylab = 'Dimension 2')
+
+```
+
+### Estimating Negative Binomial Dispersion
+
+```{r}
+# Biological Variation Coefficient
+y <- estimateDisp(y, design)
+plotBCV(y, main = 'BCV respet to logCPM') + theme_minimal()
+
+```
+
+```{r}
+y$common.dispersion
+
+head(y$trended.dispersion)
+
+head(y$tagwise.dispersion)
+```
+
+```{r}
+fit <- glmQLFit(y, design)
+fit
+
+# brain vs kidney
+qlfBK <- glmQLFTest(fit, contrast=c(-1,1,0))
+# brain vs liver 
+qlfBL <- glmQLFTest(fit, contrast=c(-1,0,1))
+# kidney vs liver
+qlfKL <- glmQLFTest(fit, contrast=c(0,-1,1))
+```
+
+```{r}
+
+head(qlfBK$table)
+head(qlfBL$table)
+head(qlfKL$table)
+
+```
+
+```{r}
+tabBK <- topTags(qlfBK, n=10000000 ,adjust.method = "BH", sort.by = "PValue", p.value = 1) # get the whole table
+tabBK <- as.data.frame(tabBK)
+
+
+tabBL <- topTags(qlfBL, n=10000000 ,adjust.method = "BH", sort.by = "PValue", p.value = 1)
+tabBL <- as.data.frame(tabBL)
+
+tabKL <- topTags(qlfKL, n=10000000 ,adjust.method = "BH", sort.by = "PValue", p.value = 1)
+tabKL <- as.data.frame(tabKL)
+
+topmatrix <- matrix(c(dim(tabBK), dim(tabBL), dim(tabKL)), nrow = 3, ncol = 2, byrow = T)
+
+rownames(topmatrix) <- c('B-K', 'B-L', 'K-L')
+
+topmatrix
+```
+
+```{r}
+#Brain-Kidney
+summary(decideTests(qlfBK, p.value=0.01, lfc=1))
+summary(decideTests(qlfBK, p.value=0.01, lfc=0))
+summary(decideTests(qlfBK, p.value=0.05, lfc=1))
+summary(decideTests(qlfBK, p.value=0.05, lfc=0))
+
+
+```
+
+```{r}
+
+#Brain-Liver
+summary(decideTests(qlfBL, p.value=0.01, lfc=1))
+summary(decideTests(qlfBL, p.value=0.01, lfc=0))
+summary(decideTests(qlfBL, p.value=0.05, lfc=1))
+summary(decideTests(qlfBL, p.value=0.05, lfc=0))
+
+
+```
+
+```{r}
+#Kidney-Liver
+summary(decideTests(qlfKL, p.value=0.01, lfc=1))
+summary(decideTests(qlfKL, p.value=0.01, lfc=0))
+summary(decideTests(qlfKL, p.value=0.05, lfc=1))
+summary(decideTests(qlfKL, p.value=0.05, lfc=0))
+
+
+```
+
+```{r}
+
+tabBK <- tabBK[which((tabBK$logFC > 1 | tabBK$logFC < -1) & tabBK$FDR < 0.01 & tabBK$logCPM > 0),]
+tabBL <- tabBL[which((tabBL$logFC > 1 | tabBL$logFC < -1) & tabBL$FDR <0.01 & tabBL$logCPM > 0),]
+tabKL <- tabKL[which((tabKL$logFC > 1 | tabKL$logFC < -1) & tabKL$FDR <0.01 & tabKL$logCPM > 0),]
+
+```
+
+```{r}
+
+tot_brain <- intersect(rownames(tabBK), rownames(tabBL))
+tot_liver <- intersect(rownames(tabBL), rownames(tabKL))
+tot_kidney <- intersect(rownames(tabBK), rownames(tabKL))
+
+
+```
+
+```{r}
+
+
+#
+masks_brain <- (startsWith(tot_brain, 'RPL') |
+                startsWith(tot_brain, 'LOC') |
+                startsWith(tot_brain, 'LINC') |
+                startsWith(tot_brain, 'MIR') |
+                startsWith(tot_brain, 'SNORD')
+              )
+
+tot_brain <- tot_brain[!masks_brain]
+length(tot_brain)
+
+
+```
+
+```{r}
+
+#
+masks_liver <- (startsWith(tot_liver, 'RPL') |
+                startsWith(tot_liver, 'LOC') |
+                startsWith(tot_liver, 'LINC') |
+                startsWith(tot_liver, 'MIR') |
+                startsWith(tot_liver, 'SNORD')
+               )
+
+tot_liver <- tot_liver[!masks_liver]
+length(tot_liver)
+
+
+```
+
+```{r}
+
+#
+masks_kidney <- (startsWith(tot_kidney, 'RPL') |
+                 startsWith(tot_kidney, 'LOC') |
+                 startsWith(tot_kidney, 'LINC') |
+                 startsWith(tot_kidney, 'MIR') |
+                 startsWith(tot_kidney, 'SNORD')
+                )
+
+tot_kidney <- tot_kidney[!masks_kidney]
+length(tot_kidney)
+
+
+```
+
+```{r}
+
+topgenes <- matrix(c(head(tot_brain), 
+                     head(tot_liver), 
+                     head(tot_kidney)), 
+                   ncol = 3, 
+                   )
+colnames(topgenes) <- c('Brain', 'Liver', 'Kidney')
+topgenes
+```
+
+```{r}
+
+tabBK <- cbind(tabBK, upBRAIN = "", upKIDNEY = "")
+
+for (i in 1:nrow(tabBK)) {
+  if (tabBK[i,]$logFC > 1) 
+  {tabBK[i,]$upBRAIN <- rownames(tabBK)[i]}
+  else 
+  {tabBK[i,]$upKIDNEY <- rownames(tabBK)[i]}
+}
+
+head(tabBK)
+
+```
+
+```{r}
+tabBL <- cbind(tabBL, upBRAIN = "", upLIVER = "")
+
+for (i in 1:nrow(tabBL)) {
+  if (tabBL[i,]$logFC > 1) 
+  {tabBL[i,]$upBRAIN <- rownames(tabBL)[i]}
+  else 
+  {tabBL[i,]$upLIVER <- rownames(tabBL)[i]}
+}
+
+head(tabBL)
+
+```
+
+```{r}
+
+tabKL <- cbind(tabKL, upKIDNEY = "", upLIVER = "")
+
+for (i in 1:nrow(tabKL)) {
+  if (tabKL[i,]$logFC > 1) 
+  {tabKL[i,]$upKIDNEY <- rownames(tabKL)[i]}
+  else 
+  {tabKL[i,]$upLIVER <- rownames(tabKL)[i]}
+}
+
+head(tabKL)
+```
+
+```{r}
+
+```
+
+```{r}
+
+
+length(tabBK$upBRAIN[tabBK$upBRAIN != ""])
+length(tabBK$upKIDNEY[tabBK$upKIDNEY != ""])
+table(tabBK$upBRAIN != "") # T: up in Brain 2274 / F: up in Kidney 2467
+
+length(tabBL$upBRAIN[tabBL$upBRAIN != ""])
+length(tabBL$upLIVER[tabBL$upLIVER != ""])
+table(tabBL$upBRAIN != "") # T: up in Brain 3458 / F: up in Liver 3704
+
+
+length(tabKL$upKIDNEY[tabKL$upKIDNEY != ""])
+length(tabKL$upLIVER[tabKL$upLIVER != ""])
+table(tabKL$upKIDNEY != "") # T: up in Kidney 1427 / F: up in Liver 1599
+
+
+```
+
+```{r}
+# comparison vs both
+mine_genes <- function(up1, up2) {
+  
+                upGENES_both <- vector()
+                for (j in rownames(up1)) {
+                  if (j %in% up2) {
+                    upGENES_both <- c(upGENES_both, j)
+                  }
+                }
+                return(upGENES_both)
+}
+
+
+
+genes_b <- tabBK[which(tabBK$upBRAIN != ""),]
+genes_l <- tabBL[which(tabBL$upLIVER != ""),]
+genes_k <- tabKL[which(tabKL$upKIDNEY != ""),]
+
+length(mine_genes(genes_b, tabBL$upBRAIN))
+length(mine_genes(genes_l, tabKL$upLIVER))
+length(mine_genes(genes_k, tabBK$upKIDNEY))
+
+
+
+
+```
+
+```{r}
+# comparison with chest hair 
+library(rstatix)
+
+
+which(rowData(rse_brain)$gene_name == "GRIN1") # my gene, index 51767
+
+assays(rse_brain)$TPM <- recount::getTPM(rse_brain)
+assays(rse_liver)$TPM <- recount::getTPM(rse_liver)
+assays(rse_kidney)$TPM <- recount::getTPM(rse_kidney)
+
+
+df_b <- data.frame(TPM=assays(rse_brain)$TPM[51767,],
+                   group="Brain") 
+
+df_l <- data.frame(TPM=assays(rse_liver)$TPM[51767,],
+                   group="Liver") 
+
+df_k <- data.frame(TPM=assays(rse_kidney)$TPM[51767,],
+                   group="Kidney") 
+
+
+
+data_GRIN1 <- rbind(df_b,df_l,df_k)
+
+dim(df_b)[1]+dim(df_l)[1]+dim(df_k)[1]
+
+
+
+#Statistical test - i'm going to repeat them with a few methods
+# for test purpose
+
+res_kruskal <- kruskal.test(data_GRIN1$TPM ~ data_GRIN1$group) 
+res_kruskal
+
+data.frame(data_GRIN1 %>% kruskal_test(TPM ~ group))
+# extra low p-value
+```
+
+```{r}
+
+shapiro.test(data_GRIN1$TPM) # not normal
+
+```
+
+```{r}
+
+subset_wilk <- function(tissue1, tissue2){
+  wilk_sub <- data.frame(TPM = data_GRIN1$TPM[which(data_GRIN1$group ==tissue1 | data_GRIN1$group == tissue2)],
+                        group = data_GRIN1$group[data_GRIN1$group == tissue1 |
+data_GRIN1$group == tissue2])
+  return(wilk_sub)
+}
+
+
+```
+
+```{r}
+
+wilk_bl <- subset_wilk('Brain', 'Liver')
+wilk_bk <- subset_wilk('Brain', 'Kidney')
+wilk_kl <- subset_wilk('Kidney', 'Liver')
+
+
+```
+
+```{r}
+
+res_bl <- wilcox.test(wilk_bl$TPM ~ wilk_bl$group)
+res_bk <- wilcox.test(wilk_bk$TPM ~ wilk_bk$group)
+res_kl <- wilcox.test(wilk_kl$TPM ~ wilk_kl$group)
+
+wilk_results <- data.frame(Test = rbind('Brain-Liver', 
+                                        'Brain-Kidney',
+                                        'Kidney-Liver'),
+                           W = rbind(res_bl$statistic, 
+                                     res_bk$statistic,
+                                     res_kl$statistic),
+                           p.val = rbind(res_bl$p.value,
+                                         res_bk$p.value,
+                                         res_kl$p.value))
+
+
+wilk_results
+```
+
+```{r}
+data_GRIN1 %>% rstatix::wilcox_test(TPM ~ group, p.adjust.method = 'BH') 
+# very differently expressed 
+
+```
+
+```{r}
+#| echo: false
+#| output: false
+tricol <- alpha(c('darkmagenta', 'darkgreen', 'brown'), 0.3)
+
+
+```
+
+```{r}
+
+ggplot(data = data_GRIN1, aes(x = group, y = TPM, fill = group), ) + geom_boxplot(notch = T, fill = tricol) 
+
+```
+
+# ENRICHMENT
+
+```{r}
+#| output: false
+
+library(enrichR)
+setEnrichrSite("Enrichr")
+website_live <- T
+```
+
+```{r}
+library(DescTools) # package for the %like% operator
+```
+
+## Gene onthology
+
+```{r}
+# search for databases
+# gene onthology
+sort(listEnrichrDbs()$libraryName[which(listEnrichrDbs()$libraryName %like% "GO%")])
+
+
+
+```
+
+```{r}
+# make GO db
+dbs_GO <- c("GO_Biological_Process_2023",
+            "GO_Cellular_Component_2023",
+            "GO_Molecular_Function_2023"
+            )
+
+```
+
+```{r}
+GO_enrich <- function(c.table){
+  
+  if (website_live) {
+    enriched_GO <- enrichr(c.table, dbs_GO)
+  }
+  
+if (website_live) {
+  
+return(list(
+
+plotEnrich(title = "Enrichement: GO Biological Process 2023", enriched_GO[[1]], showTerms = 5, numChar = 40, y = "Count", orderBy = "P.value"),
+
+plotEnrich(title = "Enrichement: GO Cellular Component 2023", enriched_GO[[2]], showTerms = 5, numChar = 40, y = "Count", orderBy = "P.value"),
+
+plotEnrich(title = "Enrichement: GO Molecular Function 2023", enriched_GO[[3]], showTerms = 5, numChar = 40, y = "Count", orderBy = "P.value")))
+  }
+}
+```
+
+### Brain enrichment: GO
+
+```{r}
+enriched_GO_brain <- GO_enrich(tot_brain)
+enriched_GO_brain
+```
+
+### Liver enrichment: GO
+
+```{r}
+
+enriched_GO_liver <- GO_enrich(tot_liver)
+enriched_GO_liver
+```
+
+### Kidney enrichment: GO
+
+```{r}
+
+enriched_GO_kidney <- GO_enrich(tot_kidney)
+enriched_GO_kidney
+
+```
+
+### Pathway Enrichment
+
+```{r}
+sort(listEnrichrDbs()$libraryName[which(listEnrichrDbs()$libraryName %like% c('Bio%', '%KEG%', '%Path%'))])
+```
+
+```{r}
+
+dbs_path <- c("BioPlanet_2019", 
+              "WikiPathway_2021_Human", 
+              "KEGG_2021_Human", 
+              "Elsevier_Pathway_Collection")
+```
+
+```{r}
+path_enrich <- function(c.table){
+  
+  if (website_live) {
+    enriched_path <- enrichr(c.table, dbs_path)
+  }
+  
+if (website_live) {
+  
+return(list(
+
+plotEnrich(title = "Patwhay Enrichement: BioPlanet", enriched_path[[1]], showTerms = 5, numChar = 40, y = "Count", orderBy = "P.value"),
+
+plotEnrich(title = "Patwhay Enrichement: WikiPathway", enriched_path[[2]], showTerms = 5, numChar = 40, y = "Count", orderBy = "P.value"),
+
+plotEnrich(title = "Patwhay Enrichement: KEGG", enriched_path[[3]], showTerms = 5, numChar = 40, y = "Count", orderBy = "P.value"),
+
+plotEnrich(title = "Patwhay Enrichement: Elsevier", enriched_path[[4]], showTerms = 5, numChar = 40, y = "Count", orderBy = "P.value")))
+}
+}
+
+```
+
+```{r}
+# brain
+enriched_path_brain <- path_enrich(tot_brain)
+enriched_path_brain
+```
+
+```{r}
+#liver
+enriched_path_liver <- path_enrich(tot_liver)
+enriched_path_liver
+```
+
+```{r}
+#kidney
+enriched_path_kidney <- path_enrich(tot_kidney)
+enriched_path_kidney
+```
+
+### Gene Atlas Enrichment
+
+```{r}
+
+dbs_atlas <- "Human_Gene_Atlas"
+
+```
+
+```{r}
+gene.atlas_enrich <- function(c.table){
+  
+  if (website_live) {
+    enriched_atlas <- enrichr(c.table, dbs_atlas)
+  }
+  
+if (website_live) {
+return(
+plotEnrich(title = "Enrichement: Human Gene Atlas", enriched_atlas[[1]], showTerms = 5, numChar = 40, y = "Count", orderBy = "P.value"))
+}
+  }
+```
+
+```{r}
+#brain
+gene.atlas_enrich(tot_brain)
+```
+
+```{r}
+gene.atlas_enrich(tot_liver)
+```
+
+```{r}
+gene.atlas_enrich(tot_kidney)
+```
